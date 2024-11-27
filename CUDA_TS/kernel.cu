@@ -1,4 +1,4 @@
-﻿#include "cuda_runtime.h"
+#include "cuda_runtime.h"
 #include "device_launch_parameters.h"
 
 #include <stdio.h>
@@ -20,8 +20,7 @@ __global__ void MuSigma(float* expansionTS_d, float* mu_d, float* sigma_d, int s
             sum += pow(expansionTS_d[j] - mu_d[index], 2);
         }
         sigma_d[index] = sqrtf(sum / subseqLen);
-    }
-    
+    }  
 }
 __global__ void Scalar(float* expansionTS_d, int* scalar_d, int sizeMat, int subseqLen, int more) {
 
@@ -44,7 +43,7 @@ __global__ void Scalar(float* expansionTS_d, int* scalar_d, int sizeMat, int sub
 }
 
 
-void cudaRan_MuSigma(float * ts, int sizeTS, int subseqLen) {
+void cudaRan_MuSigma(float * ts, int sizeTS, int subseqLen, char * out_mu, char * out_sigma) {
 
     int sizeSubseq = sizeTS - subseqLen + 1;
     int block = 100;
@@ -91,13 +90,13 @@ void cudaRan_MuSigma(float * ts, int sizeTS, int subseqLen) {
     cudaFree(sigma_d);
 
     std::ofstream file;
-    file.open("TS_mu.txt");
+    file.open(out_mu);
     for (int i = 0; i < sizeSubseq; i++) {
         file << std::to_string(mu[i]) << " " << i << "\n";
     }
     file.close();
 
-    file.open("TS_sigma.txt");
+    file.open(out_sigma);
     for (int i = 0; i < sizeSubseq; i++) {
         file << std::to_string(sigma[i]) << " " << i << "\n";
     }
@@ -105,7 +104,7 @@ void cudaRan_MuSigma(float * ts, int sizeTS, int subseqLen) {
 }
 
 
-void cudaRan_Scalar(float* ts, int sizeTS, int subseqLen) {
+void cudaRan_Scalar(float* ts, int sizeTS, int subseqLen, char * out_scalar) {
 
     int sizeSubseq = sizeTS - subseqLen + 1;
     int block_n = 100;
@@ -154,7 +153,7 @@ void cudaRan_Scalar(float* ts, int sizeTS, int subseqLen) {
     cudaFree(scalar_d);
 
     std::ofstream file;
-    file.open("TS_scalar.txt");
+    file.open(out_scalar);
     for (int i = 0; i < sizeSubseq; i++) {
         for (int j = 0; j < sizeSubseq; j++) {
             if (i != j && i > j) {
@@ -165,25 +164,26 @@ void cudaRan_Scalar(float* ts, int sizeTS, int subseqLen) {
     file.close();
 }
 
-int main()
+int main(int argc, char** argv)
 {
-    float ts[5000]{};
+
+    float* ts = new float[std::atoi(argv[2])];
     std::ifstream file;
     float num;
-    file.open("TS.txt");
+    file.open(argv[1]);
     int i = 0;
     while (file >> num) {
         ts[i++] = num;
     }
     file.close();
 
-    int subseqLen = 256 ;
+    int subseqLen = std::atoi(argv[3]);
 
-    int sizeTS = sizeof(ts) / sizeof(float);
+    int sizeTS = _msize(ts) / sizeof(float);
 
-
-    cudaRan_Scalar(ts, sizeTS, subseqLen);
-    cudaRan_MuSigma(ts, sizeTS, subseqLen);
+    cudaRan_MuSigma(ts, sizeTS, subseqLen, argv[4], argv[5]);
+    cudaRan_Scalar(ts, sizeTS, subseqLen, argv[6]);
+    
 
     return 0;
 }
