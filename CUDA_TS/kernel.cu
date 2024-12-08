@@ -22,39 +22,36 @@ __global__ void MuSigma(float* expansionTS_d, float* mu_d, float* sigma_d, int s
         sigma_d[index] = sqrtf(sum / subseqLen);
     }  
 }
-__global__ void Scalar(float* expansionTS_d, int* scalar_d, int sizeMat, int subseqLen, int more) {
+
+__global__ void Scalar(float* TS_d, float* scalar_d, int* shift_d, int* x_d, int subseqLen, int more, int scalarLen, int matrixLen) {
 
     for (int i = 0; i < more; i++) {
         int index_x = (threadIdx.x + blockIdx.x * blockDim.x) + (i * gridDim.x * blockDim.x);
-        for (int j = 0; j < more; j++) {
-            int index_y = (threadIdx.y + blockIdx.y * blockDim.y) + (j * gridDim.y * blockDim.y);
-            int sum;
-            if (index_x != index_y && index_x > index_y) {
-                sum = 0;
-                int iy = index_y;
-                for (int ix = index_x; ix < index_x + subseqLen; ix++) {
-                    sum += expansionTS_d[ix] * expansionTS_d[iy];
-                    iy++;
-                }
-                scalar_d[index_x + sizeMat * index_y] = sum;
+        if (index_x < scalarLen) {
+            index_x = x_d[(threadIdx.x + blockIdx.x * blockDim.x) + (i * gridDim.x * blockDim.x)];
+            int x = index_x % matrixLen;
+            int y = index_x / matrixLen;
+            float sum = 0;
+            for (int i = 0; i < subseqLen; i++) {
+                sum += TS_d[x + i] * TS_d[y + i];
             }
+            scalar_d[x + (y * matrixLen) - shift_d[y]] = sum;
         }
     }
 }
 
-
-void cudaRan_MuSigma(float * ts, int sizeTS, int subseqLen, char * out_mu, char * out_sigma) {
+extern "C" __declspec(dllexport) void cudaRan_MuSigma(float * ts, int sizeTS, int subseqLen, float* mu, float* sigma) {
 
     int sizeSubseq = sizeTS - subseqLen + 1;
-    int block = 100;
-    int thread = 1000;
+    int block = 10;
+    int thread = 100;
     int allTread = block * thread;
     int more = sizeSubseq / allTread + 1;
     int num = more * allTread;
 
     float *expansionTS = new float[num + subseqLen - 1] {} ;
-    float *mu = new float[num] {} ;
-    float *sigma = new float[num] {} ;
+    //float *mu = new float[num] {} ;
+    //float *sigma = new float[num] {} ;
     
     for (int i = 0; i < sizeTS; i++) {
         expansionTS[i] = ts[i];
@@ -88,102 +85,74 @@ void cudaRan_MuSigma(float * ts, int sizeTS, int subseqLen, char * out_mu, char 
     cudaFree(expansionTS_d);
     cudaFree(mu_d);
     cudaFree(sigma_d);
-
-    std::ofstream file;
-    file.open(out_mu);
-    for (int i = 0; i < sizeSubseq; i++) {
-        file << std::to_string(mu[i]) << " " << i << "\n";
-    }
-    file.close();
-
-    file.open(out_sigma);
-    for (int i = 0; i < sizeSubseq; i++) {
-        file << std::to_string(sigma[i]) << " " << i << "\n";
-    }
-    file.close();
 }
 
 
-void cudaRan_Scalar(float* ts, int sizeTS, int subseqLen, char * out_scalar) {
+extern "C" __declspec(dllexport) void cudaRan_Scalar(float* ts, int sizeTS, int subseqLen, float * scalar) {
 
     int sizeSubseq = sizeTS - subseqLen + 1;
-    int block_n = 100;
-    int thread_n = 10;
-    int allTread = thread_n * block_n;
 
-    dim3 block = dim3(block_n, block_n);
-    dim3 thread = dim3(thread_n, thread_n);
+    int block = 100;
+    int thread = 100;
+    int allTread = thread * block;
 
-    int more = sizeSubseq / allTread + 1;
-
-    int num = more * allTread;
-
-    float* expansionTS = new float[num + subseqLen - 1];
-    for (int i = 0; i < sizeTS; i++) {
-        expansionTS[i] = ts[i];
+    int* shift = new int[sizeSubseq - 1] {1};
+    for (int i = 2; i < sizeSubseq; i++) {
+        shift[i - 1] = shift[i - 2] + i;
     }
 
-    int* scalar = new int[num * num] {};
+    int more = shift[sizeSubseq - 2] / allTread + 1;
 
-    float* expansionTS_d;
-    int* scalar_d;
+    int* buf = new int[sizeSubseq - 1] {0};
+    for (int i = 1; i < sizeSubseq - 1; i++) {
+        buf[i] = (sizeSubseq + 1) * i;
+    }
 
-    cudaMalloc((void**)&expansionTS_d, sizeof(float) * (num + subseqLen - 1));
-    cudaMalloc((void**)&scalar_d, sizeof(int) * num * num);
+    int* x = new int[shift[sizeSubseq - 2]];
 
+    int io = 0;
+    for (int i = sizeSubseq - 1; i > 0; i--) {
+        for (int j = 0; j < i; j++) {
+            x[io] = j + 1 + buf[sizeSubseq - 1 - i];
+            io++;
+        }
+    }
+
+    //float* scalar = new float[shift[sizeSubseq - 2]];
+    
+    float* TS_d;
+    float* scalar_d;
+    int* shift_d;
+    int* x_d;
+
+    cudaMalloc((void**)&TS_d, sizeof(float) * sizeTS);
+    cudaMalloc((void**)&scalar_d, sizeof(float) * shift[sizeSubseq - 2]);
+    cudaMalloc((void**)&shift_d, sizeof(int) * (sizeSubseq - 1));
+    cudaMalloc((void**)&x_d, sizeof(int) * shift[sizeSubseq - 2]);
+
+    float time;
+
+    cudaMemcpy(TS_d, ts, sizeof(float) * sizeTS, cudaMemcpyKind::cudaMemcpyHostToDevice);
+    cudaMemcpy(shift_d, shift, sizeof(int) * (sizeSubseq - 1), cudaMemcpyKind::cudaMemcpyHostToDevice);
+    cudaMemcpy(x_d, x, sizeof(int) * shift[sizeSubseq - 2], cudaMemcpyKind::cudaMemcpyHostToDevice);
 
     cudaEvent_t start, stop;
-    float time;
+
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
     cudaEventRecord(start, 0);
 
-    cudaMemcpy(expansionTS_d, expansionTS, sizeof(float) * (num + subseqLen - 1), cudaMemcpyKind::cudaMemcpyHostToDevice);
-
-    Scalar <<<block, thread >>> (expansionTS_d, scalar_d, num, subseqLen, more);
+    Scalar <<<block, thread >>> (TS_d, scalar_d, shift_d, x_d, subseqLen, more, shift[sizeSubseq - 2], sizeSubseq);
 
     cudaEventRecord(stop, 0);
     cudaEventSynchronize(stop);
     cudaEventElapsedTime(&time, start, stop);
     printf("Time work: %f\n", time);
 
-    cudaMemcpy(scalar, scalar_d, sizeof(int) * num * num, cudaMemcpyKind::cudaMemcpyDeviceToHost);
+    cudaMemcpy(scalar, scalar_d, sizeof(float) * shift[sizeSubseq - 2], cudaMemcpyKind::cudaMemcpyDeviceToHost);
 
-    cudaFree(expansionTS_d);
+    cudaFree(TS_d);
     cudaFree(scalar_d);
-
-    std::ofstream file;
-    file.open(out_scalar);
-    for (int i = 0; i < sizeSubseq; i++) {
-        for (int j = 0; j < sizeSubseq; j++) {
-            if (i != j && i > j) {
-                file << std::to_string(scalar[i + num * j]) << " " << i << " " << j << "\n";
-            }
-        }
-    }
-    file.close();
-}
-
-int main(int argc, char** argv)
-{
-
-    float* ts = new float[std::atoi(argv[2])];
-    std::ifstream file;
-    float num;
-    file.open(argv[1]);
-    int i = 0;
-    while (file >> num) {
-        ts[i++] = num;
-    }
-    file.close();
-
-    int subseqLen = std::atoi(argv[3]);
-
-    int sizeTS = _msize(ts) / sizeof(float);
-
-    cudaRan_MuSigma(ts, sizeTS, subseqLen, argv[4], argv[5]);
-    cudaRan_Scalar(ts, sizeTS, subseqLen, argv[6]);
-    
-
-    return 0;
+    cudaFree(shift_d);
+    cudaFree(x_d);
 }
