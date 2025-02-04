@@ -1,4 +1,4 @@
-def CUDA_Union(name, subseqLen, fragmentNum, fragmentComp, fragmentNum, step):
+def GPU_Union(name, subseqLen, fragmentNum, fragmentComp, fragmentNum, step):
 
     lib = ctypes.CDLL("C:\\Project\\Preprocessing\\CUDA_TS.dll")
 
